@@ -70,14 +70,22 @@
   "Given a page-url, scrape the page, return a list of book entries
   and the next page-url (if any)."
   [page-url]
+  (ctl/info "Start Parse: " page-url)
   (let [req (http/parse-url page-url)
         rendered-page (.get (Jsoup/connect page-url))
         book-entries (.select rendered-page "table#listing > tbody > tr")
         next-page-elem (->> (.select rendered-page
-                                     "div.navigation > table.buttons > td.button > a[href]")
+                                     "div.navigation > table.buttons > tbody > tr > td.button > a[href]")
                             (filter (fn [a] (= "Next" (.text a))))
                             first)
-        next-page-url (when next-page-elem (.attr next-page-elem "href"))]
+        next-page-url (when next-page-elem
+                        (str (name (:scheme req))
+                             "://"
+                             (:server-name req)
+                             ":"
+                             (:server-port req)
+                             (.attr next-page-elem "href")))]
+    (ctl/info "Done Parse: " page-url)
     [next-page-url (map process-book-entry (repeat req) book-entries)]))
 
 (defn- add-bookdir-to-entry
