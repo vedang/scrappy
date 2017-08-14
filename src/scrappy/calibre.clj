@@ -184,3 +184,8 @@
   []
   (cp/shutdown io-pool)
   (cp/shutdown control-pool))
+
+(defn threadpool-stats
+  [pool]
+  {:queue-length (.getQueueLength (.getStats pool) 0.9)
+   :task-latency (.getTaskLatency (.getStats pool) 0.9)})
