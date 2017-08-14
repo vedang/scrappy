@@ -93,4 +93,13 @@
   should be downloaded to the book-entry."
   [basedir be]
   (assoc be
-         :bookdir (str basedir (:title be) "/")))
+         :bookdir (str basedir (:author be) "/" (:title be) "/")))
+
+(defn- extract-download-links
+  "Given a book-entry, return an array of maps with the download link
+  and the directory where it should be downloaded."
+  [be]
+  (map (fn [l]
+         {:link l
+          :dir (:bookdir be)})
+       (:links be)))
