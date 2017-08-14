@@ -3,9 +3,13 @@
             [clj-http.util :as chu]
             [clojure.java.io :as io]
             [clojure.string :as cs]
-            [clojure.tools.logging :as ctl])
-  (:import java.io.File
+            [clojure.tools.logging :as ctl]
+            [com.climate.claypoole :as cp])
+  (:import io.aleph.dirigiste.Executor
+           java.io.File
            java.lang.Character
+           [java.util.concurrent Executors LinkedBlockingQueue TimeUnit]
+           java.util.EnumSet
            org.jsoup.Jsoup))
 
 (defn- url->filename
@@ -103,3 +107,80 @@
          {:link l
           :dir (:bookdir be)})
        (:links be)))
+
+(def num-threads (+ 2 (cp/ncpus)))
+(def io-pool
+  "A pool of threads for network and disk IO."
+  (io.aleph.dirigiste.Executor. (Executors/defaultThreadFactory)
+                                (LinkedBlockingQueue.)
+                                (io.aleph.dirigiste.Executors/fixedController num-threads)
+                                num-threads
+                                (EnumSet/allOf io.aleph.dirigiste.Stats$Metric)
+                                25
+                                10000
+                                TimeUnit/MILLISECONDS))
+(def control-pool
+  "A pool of threads for controlling the execution of the scrapper."
+  (io.aleph.dirigiste.Executor. (Executors/defaultThreadFactory)
+                                (LinkedBlockingQueue.)
+                                (io.aleph.dirigiste.Executors/fixedController num-threads)
+                                num-threads
+                                (EnumSet/allOf io.aleph.dirigiste.Stats$Metric)
+                                25
+                                10000
+                                TimeUnit/MILLISECONDS))
+
+(defn- construct-calibre-listing-url
+  [calibre-host calibre-port start-from num-entries]
+  (str "http://"
+       calibre-host
+       ":"
+       calibre-port
+       "/calibre/mobile?"
+       (http/generate-query-string {"search" ""
+                                    "order" "descending"
+                                    "sort" "date"
+                                    "num" num-entries
+                                    "start" start-from})))
+
+(defn- download-books
+  "The main function to download a given set of books. Starts
+  downloading in a future. The number of future threads is controlled
+  by the `control-pool`. Each future spawns threads to download a
+  version of a book. The number of io threads is controlled by the
+  `io-pool`."
+  [basedir book-entries]
+  (cp/future control-pool
+             (->> book-entries
+                  (map (partial add-bookdir-to-entry basedir))
+                  (mapcat extract-download-links)
+                  (cp/upmap io-pool
+                            (fn [{:keys [link dir]}]
+                              (download-file dir link))))))
+
+(defn download-calibre-entries
+  "This is the function that you are probably looking for.
+
+  Given the host and port of a calibre server, scrape it and download
+  the books it is hosting to basedir."
+  [calibre-host calibre-port basedir]
+  (let [first-page-url (construct-calibre-listing-url calibre-host
+                                                      calibre-port
+                                                      1
+                                                      100)]
+    (loop [page-url first-page-url
+           ;; Adding a control for basic testing (it will stop the
+           ;; program in a bit, while I figure out details of how to
+           ;; see dirigiste stats.
+           control-counter 1]
+      (let [[next-page-url book-entries] (page->entries page-url)]
+        (download-books basedir book-entries)
+        (when (and next-page-url (< control-counter 4))
+          (recur next-page-url (inc control-counter)))))))
+
+(defn shutdown-threadpools
+  "Shutdown our control and io pools. Existing tasks will be
+  completed, pending tasks will not be picked up."
+  []
+  (cp/shutdown io-pool)
+  (cp/shutdown control-pool))
