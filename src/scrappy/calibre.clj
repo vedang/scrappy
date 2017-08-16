@@ -19,17 +19,6 @@
       last
       chu/url-decode))
 
-(defn- download-file
-  [dirname fileurl]
-  (let [filename (str dirname (url->filename fileurl))]
-    (if (.exists (io/as-file filename))
-      (ctl/info (format "File: %s already exists, not doing anything here."
-                        filename))
-      (do (ctl/info (format "Downloading File: %s" fileurl))
-          (io/make-parents filename)
-          (io/copy (:body (http/get fileurl {:as :stream}))
-                   (File. filename))))))
-
 (defn- process-title-and-author
   [taa-str]
   (when-let [[_ title author] (re-find #"(.+) by (.+)" taa-str)]
@@ -108,6 +97,10 @@
           :dir (:bookdir be)})
        (:links be)))
 
+;;; NOTE: I've been looking for a reason to play around with
+;;; `io.aleph.dirigiste` -> an instrumented threadpool with good
+;;; control over scaling of threads. This is not strictly needed for
+;;; scraping :)
 (def num-threads (+ 2 (cp/ncpus)))
 (def io-pool
   "A pool of threads for network and disk IO."
@@ -130,6 +123,19 @@
                                 10000
                                 TimeUnit/MILLISECONDS))
 
+(defn shutdown-threadpools
+  "Shutdown our control and io pools. Existing tasks will be
+  completed, pending tasks will not be picked up."
+  []
+  (cp/shutdown io-pool)
+  (cp/shutdown control-pool))
+
+(defn threadpool-stats
+  "Print stats about the ongoing state of a threadpool."
+  [pool]
+  {:queue-length (.getQueueLength (.getStats pool) 0.9)
+   :task-latency (.getTaskLatency (.getStats pool) 0.9)})
+
 (defn- construct-calibre-listing-url
   [calibre-host calibre-port start-from num-entries]
   (str "http://"
@@ -142,6 +148,19 @@
                                     "sort" "date"
                                     "num" num-entries
                                     "start" start-from})))
+
+(defn- download-file
+  "Download the file to the given directory. If the file already
+  exists, don't do anything."
+  [dirname fileurl]
+  (let [filename (str dirname (url->filename fileurl))]
+    (if (.exists (io/as-file filename))
+      (ctl/info (format "File: %s already exists, not doing anything here."
+                        filename))
+      (do (ctl/info (format "Downloading File: %s" fileurl))
+          (io/make-parents filename)
+          (io/copy (:body (http/get fileurl {:as :stream}))
+                   (File. filename))))))
 
 (defn- download-books
   "The main function to download a given set of books. Starts
@@ -175,17 +194,10 @@
            control-counter 1]
       (let [[next-page-url book-entries] (page->entries page-url)]
         (download-books basedir book-entries)
-        (when (and next-page-url (< control-counter 4))
+        (when (and next-page-url (< control-counter 5))
           (recur next-page-url (inc control-counter)))))))
 
-(defn shutdown-threadpools
-  "Shutdown our control and io pools. Existing tasks will be
-  completed, pending tasks will not be picked up."
-  []
-  (cp/shutdown io-pool)
-  (cp/shutdown control-pool))
 
-(defn threadpool-stats
-  [pool]
-  {:queue-length (.getQueueLength (.getStats pool) 0.9)
-   :task-latency (.getTaskLatency (.getStats pool) 0.9)})
+(comment
+  ;; To run the program, run:
+  (download-calibre-entries "localhost" "8080" "/Users/vedang/books/"))
