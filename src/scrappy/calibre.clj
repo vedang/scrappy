@@ -101,8 +101,8 @@
 ;;; `io.aleph.dirigiste` -> an instrumented threadpool with good
 ;;; control over scaling of threads. This is not strictly needed for
 ;;; scraping :)
-(def num-threads (+ 2 (cp/ncpus)))
-(def io-pool
+(defonce num-threads (+ 2 (cp/ncpus)))
+(defonce io-pool
   "A pool of threads for network and disk IO."
   (io.aleph.dirigiste.Executor. (Executors/defaultThreadFactory)
                                 (LinkedBlockingQueue.)
@@ -112,7 +112,7 @@
                                 25
                                 10000
                                 TimeUnit/MILLISECONDS))
-(def control-pool
+(defonce control-pool
   "A pool of threads for controlling the execution of the scrapper."
   (io.aleph.dirigiste.Executor. (Executors/defaultThreadFactory)
                                 (LinkedBlockingQueue.)
@@ -134,7 +134,12 @@
   "Print stats about the ongoing state of a threadpool."
   [pool]
   {:queue-length (.getQueueLength (.getStats pool) 0.9)
-   :task-latency (.getTaskLatency (.getStats pool) 0.9)})
+   :queue-latency(.getQueueLatency (.getStats pool) 0.9)
+   :task-latency (.getTaskLatency (.getStats pool) 0.9)
+   :task-time (- (.getTaskLatency (.getStats pool) 0.9)
+                 (.getQueueLatency (.getStats pool) 0.9))
+   :utilization (.getUtilization (.getStats pool) 0.9)
+   :num-active-workers (.getNumWorkers (.getStats pool))})
 
 (defn- construct-calibre-listing-url
   [calibre-host calibre-port start-from num-entries]
@@ -194,10 +199,15 @@
            control-counter 1]
       (let [[next-page-url book-entries] (page->entries page-url)]
         (download-books basedir book-entries)
-        (when (and next-page-url (< control-counter 5))
+        (when (and next-page-url (< control-counter 50))
           (recur next-page-url (inc control-counter)))))))
 
 
 (comment
   ;; To run the program, run:
-  (download-calibre-entries "localhost" "8080" "/Users/vedang/books/"))
+  (def mainf
+    (future (download-calibre-entries "localhost"
+                                      "8080"
+                                      "/Users/vedang/books/")))
+  (threadpool-stats io-pool)
+  (threadpool-stats control-pool))
